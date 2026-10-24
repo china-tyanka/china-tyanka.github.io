@@ -11,6 +11,9 @@
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; background: var(--bg); color: var(--ink); overflow: hidden; }
   body { font-family: "Courier New", ui-monospace, Menlo, Consolas, monospace; -webkit-font-smoothing: antialiased; touch-action: none; }
+  /* phones: no blue tap flash and no select-all / callout on long press */
+  html, body, canvas, button { -webkit-tap-highlight-color: transparent; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  button:focus:not(:focus-visible) { outline: none; }
 
   canvas#world { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; }
   canvas#world.drag { cursor: grabbing; }
@@ -21,7 +24,7 @@
   canvas#trail { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 
   /* boot */
-  .boot { position: fixed; inset: 0; z-index: 30; background: #000; display: grid; place-items: center; padding: 24px; transition: opacity 1.4s ease; cursor: pointer; }
+  .boot { position: fixed; inset: 0; z-index: 30; background: #000; display: grid; place-items: center; padding: 24px; transition: opacity 1.4s ease; cursor: default; }
   .boot pre { font-size: 14px; line-height: 1.7; font-family: inherit; color: #b9b2c2; white-space: pre-wrap; max-width: 560px; width: 100%; }
   .boot .err { color: var(--mag); }
   .boot .hint { color: var(--dim); animation: blink 1.1s steps(2) infinite; }
@@ -124,9 +127,9 @@
     ['  [ click anywhere ]', 'hint'],
   ];
   const log = $('#bootlog');
-  let li = 0;
+  let li = 0, booted = false;
   (function nextLine() {
-    if (li >= bootLines.length) return;
+    if (li >= bootLines.length) { booted = true; $('#boot').style.cursor = 'pointer'; return; }
     const [text, cls] = bootLines[li++];
     const span = document.createElement('span'); if (cls) span.className = cls;
     span.textContent = text + '\n'; log.appendChild(span);
@@ -134,14 +137,15 @@
   })();
   let entered = false;
   function enter() {
-    if (entered) return; entered = true;
+    if (entered || !booted) return;      // the boot log plays to the end before you can get in
+    entered = true;
     ensureAudio();                       // entering is the gesture that lets the hum start
     const boot = $('#boot'); boot.classList.add('gone'); setTimeout(() => boot.remove(), 1500);
     startThoughts();
     setTimeout(() => { $('#hint').style.opacity = 0; }, 9000);
   }
   $('#boot').addEventListener('click', enter);
-  addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') enter(); }, { once: true });
+  addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') enter(); });
 
   /* ================================================================ 3D room */
   const canvas = $('#world');
@@ -449,9 +453,10 @@
     return ac;
   }
   addEventListener('pointerdown', ensureAudio);
+  const HUM_LEVEL = 1;
   function startHum() {
     hum = ac.createGain(); hum.gain.value = 0; hum.connect(master);
-    hum.gain.linearRampToValueAtTime(1, ac.currentTime + 3);
+    hum.gain.linearRampToValueAtTime(HUM_LEVEL, ac.currentTime + 3);
     [55, 55.4, 110.2].forEach((f, i) => { const o = ac.createOscillator(); o.type = i === 2 ? 'triangle' : 'sine'; o.frequency.value = f; const gg = ac.createGain(); gg.gain.value = i === 2 ? .025 : .07; o.connect(gg).connect(hum); o.start(); });
     const buf = ac.createBuffer(1, ac.sampleRate * 2, ac.sampleRate), d = buf.getChannelData(0);
     for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * .5;
@@ -532,7 +537,7 @@
     // the very first click on it just wakes the sound up (already on): the window pointerdown has opened it a moment ago
     if (!ac || performance.now() - audioBorn < 1500) { ensureAudio(); return; }
     const on = sb.getAttribute('aria-pressed') !== 'true';
-    hum.gain.cancelScheduledValues(ac.currentTime); hum.gain.setTargetAtTime(on ? 1 : 0, ac.currentTime, .2);
+    hum.gain.cancelScheduledValues(ac.currentTime); hum.gain.setTargetAtTime(on ? HUM_LEVEL : 0, ac.currentTime, .2);
     sb.textContent = on ? '[ sound: on ]' : '[ sound: off ]'; sb.setAttribute('aria-pressed', String(on));
   });
 })();
