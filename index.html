@@ -99,7 +99,7 @@
 
 <div class="corner tl">present day<span class="mag"> // </span>present time</div>
 <div class="corner tr" id="clock">--:--:--</div>
-<div class="corner bl"><button id="sound" aria-pressed="false">[ sound: off ]</button></div>
+<div class="corner bl"><button id="sound" aria-pressed="true">[ sound: on ]</button></div>
 <div class="corner br">china_tyanka<span class="mag"> // </span>texture not found</div>
 <div class="hint-drag" id="hint">[ drag to look around ]</div>
 
@@ -135,6 +135,7 @@
   let entered = false;
   function enter() {
     if (entered) return; entered = true;
+    ensureAudio();                       // entering is the gesture that lets the hum start
     const boot = $('#boot'); boot.classList.add('gone'); setTimeout(() => boot.remove(), 1500);
     startThoughts();
     setTimeout(() => { $('#hint').style.opacity = 0; }, 9000);
@@ -252,6 +253,7 @@
   let yaw = 0, pitch = -0.04, dragging = false, lastX = 0, lastY = 0, lastInput = performance.now(), moved = 0;
   canvas.addEventListener('pointerdown', (e) => {
     enter(); dragging = true; moved = 0; lastX = e.clientX; lastY = e.clientY;
+    pointer.x = (e.clientX / innerWidth) * 2 - 1; pointer.y = -(e.clientY / innerHeight) * 2 + 1;   // touch has no hover before the tap
     canvas.setPointerCapture(e.pointerId); canvas.classList.add('drag'); lastInput = performance.now();
   });
   canvas.addEventListener('pointermove', (e) => {
@@ -280,6 +282,10 @@
   function showBubble(mesh) {
     if (current === mesh) return;
     current = mesh;
+    // figures bob, so the cursor at their edge flickers in and out: one chime per figure per 1.5 s
+    const now = performance.now();
+    if (now - (mesh.userData.chimedAt || 0) > 1500) hoverSound(figures.indexOf(mesh));
+    mesh.userData.chimedAt = now;
     const { ch } = mesh.userData;
     who.textContent = ch.name || '???';
     clearInterval(typing); said.textContent = '';
@@ -289,11 +295,22 @@
     bubble.classList.add('on');
   }
   function hideBubble() { current = null; pinned = false; bubble.classList.remove('on'); clearInterval(typing); }
-  function pick(tap) {
+  let playingCube = null;  function pick(tap) {
     ray.setFromCamera(pointer, camera);
     const hit = ray.intersectObjects(figures)[0];
+    // floor and ceiling are in the test too, so a cube only counts when it is the first thing under the cursor
+    const solid = hit ? null : ray.intersectObjects([floor, ceiling, ...cubes])[0];
+    const cubeHit = solid && cubes.includes(solid.object) ? solid : null;
+    if (tap && cubeHit) {                // a tap on a cube starts / stops the melody
+      if (playingCube) playingCube.scale.setScalar(1);
+      playingCube = toggleTune() ? cubeHit.object : null;
+      return;
+    }
     if (hit) { showBubble(hit.object); pinned = tap; canvas.classList.add('hover'); }
-    else if (!pinned || tap) { hideBubble(); canvas.classList.remove('hover'); }
+    else {
+      if (!pinned || tap) hideBubble();
+      canvas.classList.toggle('hover', !!cubeHit);
+    }
   }
   const tmp = new THREE.Vector3();
   function placeBubble() {
@@ -319,15 +336,15 @@
     camera.rotation.set(pitch, yaw, 0, 'YXZ');
     camera.position.y = 1.6 + (reduced ? 0 : Math.sin(t * .6) * .03);
     if (!reduced) {
-      // glitchy floor: slides along x, freezes for a moment, then snaps back to the start and loops.
+      // glitchy floor: slides along x at one steady speed for the whole cycle, then snaps back to the start.
       // A checkerboard looks the same every cell, so the run has to stay under half a cell (offset 1 = 2 cells):
       // a longer one reads as the floor just crawling on instead of jumping back.
-      const FLOOR_RUN = .21, FLOOR_SLIDE = .45, FLOOR_HOLD = .2;
-      const ph = t % (FLOOR_SLIDE + FLOOR_HOLD);
-      floorTex.offset.x = Math.min(1, ph / FLOOR_SLIDE) * FLOOR_RUN;
+      const FLOOR_RUN = .21, FLOOR_PERIOD = .55;
+      floorTex.offset.x = (t % FLOOR_PERIOD) / FLOOR_PERIOD * FLOOR_RUN;
     }
     for (const c of cubes) { c.rotation.y += c.userData.spin * dt; c.rotation.x += c.userData.spin * .5 * dt; }
     if (!reduced) updateSnow(dt, t);
+    if (playingCube) playingCube.scale.setScalar(1 + Math.abs(Math.sin(t * Math.PI / .6)) * .18);   // throbs in time with the tune
     for (const f of figures) {
       f.lookAt(camera.position.x, f.position.y, camera.position.z);   // always face you, stay upright
       if (!reduced) f.position.y = f.userData.baseY + Math.sin(t * .8 + f.userData.phase) * .04;
@@ -417,17 +434,30 @@
   })();
 
   /* ================================================================ sound */
-  let ac = null, master = null;
-  function startSound() {
-    ac = new (window.AudioContext || window.webkitAudioContext)();
-    master = ac.createGain(); master.gain.value = 0; master.connect(ac.destination);
-    master.gain.linearRampToValueAtTime(.55, ac.currentTime + 3);
-    [55, 55.4, 110.2].forEach((f, i) => { const o = ac.createOscillator(); o.type = i === 2 ? 'triangle' : 'sine'; o.frequency.value = f; const gg = ac.createGain(); gg.gain.value = i === 2 ? .025 : .07; o.connect(gg).connect(master); o.start(); });
+  // one audio context, opened on the first click (browsers only allow sound after a gesture).
+  // The background hum is on by default and fades in with that first click; the corner toggle only switches the hum.
+  // Effects (hover chimes, the cube melody) always play.
+  let ac = null, master = null, hum = null, audioBorn = 0;
+  function ensureAudio() {
+    if (!ac) {
+      audioBorn = performance.now();
+      ac = new (window.AudioContext || window.webkitAudioContext)();
+      master = ac.createGain(); master.gain.value = .55; master.connect(ac.destination);
+      startHum();
+    }
+    if (ac.state === 'suspended') ac.resume();
+    return ac;
+  }
+  addEventListener('pointerdown', ensureAudio);
+  function startHum() {
+    hum = ac.createGain(); hum.gain.value = 0; hum.connect(master);
+    hum.gain.linearRampToValueAtTime(1, ac.currentTime + 3);
+    [55, 55.4, 110.2].forEach((f, i) => { const o = ac.createOscillator(); o.type = i === 2 ? 'triangle' : 'sine'; o.frequency.value = f; const gg = ac.createGain(); gg.gain.value = i === 2 ? .025 : .07; o.connect(gg).connect(hum); o.start(); });
     const buf = ac.createBuffer(1, ac.sampleRate * 2, ac.sampleRate), d = buf.getChannelData(0);
     for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * .5;
     const n = ac.createBufferSource(); n.buffer = buf; n.loop = true;
     const lp = ac.createBiquadFilter(); lp.type = 'bandpass'; lp.frequency.value = 2400; lp.Q.value = .6;
-    const ng = ac.createGain(); ng.gain.value = .03; n.connect(lp).connect(ng).connect(master); n.start();
+    const ng = ac.createGain(); ng.gain.value = .03; n.connect(lp).connect(ng).connect(hum); n.start();
   }
   function blip(k) {
     if (!ac) return;
@@ -436,11 +466,74 @@
     gg.gain.setValueAtTime(.04, ac.currentTime); gg.gain.exponentialRampToValueAtTime(.0001, ac.currentTime + .25);
     o.connect(gg).connect(master); o.start(); o.stop(ac.currentTime + .26);
   }
+  const midi = (n) => 440 * Math.pow(2, (n - 69) / 12);
+
+  // hover on a character: a short glassy chime that drops in pitch, plus a crackle of static.
+  // Each character gets its own note from A minor.
+  const CHIME = [81, 76, 72, 79, 77, 74, 84];
+  function hoverSound(i) {
+    if (!ac || ac.state !== 'running') return;
+    const t0 = ac.currentTime, f = midi(CHIME[i % CHIME.length]);
+    [[f, 'triangle', .07], [f * 2.01, 'sine', .025]].forEach(([fr, type, vol]) => {
+      const o = ac.createOscillator(), g = ac.createGain();
+      o.type = type; o.frequency.setValueAtTime(fr, t0); o.frequency.exponentialRampToValueAtTime(fr * .94, t0 + .5);
+      g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(vol, t0 + .008); g.gain.exponentialRampToValueAtTime(.0001, t0 + .7);
+      o.connect(g).connect(master); o.start(t0); o.stop(t0 + .72);
+    });
+    const len = ac.sampleRate * .06, buf = ac.createBuffer(1, len, ac.sampleRate), d = buf.getChannelData(0);
+    for (let k = 0; k < len; k++) d[k] = Math.random() < .08 ? (Math.random() * 2 - 1) : 0;
+    const n = ac.createBufferSource(), hp = ac.createBiquadFilter(), ng = ac.createGain();
+    n.buffer = buf; hp.type = 'highpass'; hp.frequency.value = 3000; ng.gain.value = .06;
+    n.connect(hp).connect(ng).connect(master); n.start(t0);
+  }
+
+  // click a cube: a music-box melody in A minor loops until any cube is clicked again.
+  // [melody note, bass note] per eighth; bass only where a new chord starts.
+  const TUNE = [
+    [69, 45], [72], [76], [81], [79, 40], [76], [72], [71],
+    [65, 41], [69], [72], [77], [76, 48], [72], [69], [67],
+    [62, 38], [65], [69], [74], [72, 41], [69], [65], [64],
+    [64, 40], [68], [71], [76], [74, 40], [71], [68], [64],
+  ];
+  const EIGHTH = .3;
+  let tune = null;
+  function note(fr, t, dur, type, vol, out) {
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = type; o.frequency.value = fr;
+    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(vol, t + .006); g.gain.exponentialRampToValueAtTime(.0001, t + dur);
+    o.connect(g).connect(out); o.start(t); o.stop(t + dur + .02);
+  }
+  function startTune() {
+    const out = ac.createGain(); out.gain.value = 1; out.connect(master);
+    const echo = ac.createDelay(1), fb = ac.createGain(), wet = ac.createGain(), lp = ac.createBiquadFilter();
+    echo.delayTime.value = EIGHTH * 1.5; fb.gain.value = .32; wet.gain.value = .35; lp.type = 'lowpass'; lp.frequency.value = 2600;
+    const box = ac.createGain(); box.connect(out); box.connect(echo); echo.connect(lp).connect(fb).connect(echo); lp.connect(wet).connect(out);
+    tune = { out, box, step: 0, next: ac.currentTime + .05 };
+    tune.timer = setInterval(() => {
+      while (tune && tune.next < ac.currentTime + .15) {
+        const [m, b] = TUNE[tune.step % TUNE.length], t = tune.next;
+        note(midi(m), t, 1.4, 'triangle', .09, tune.box);
+        note(midi(m + 12), t, .5, 'sine', .02, tune.box);
+        if (b) note(midi(b), t, EIGHTH * 4.2, 'sine', .14, tune.out);
+        tune.step++; tune.next += EIGHTH;
+      }
+    }, 25);
+  }
+  function stopTune() {
+    if (!tune) return;
+    clearInterval(tune.timer);
+    const out = tune.out; out.gain.setTargetAtTime(0, ac.currentTime, .15); setTimeout(() => out.disconnect(), 1500);
+    tune = null;
+  }
+  function toggleTune() { ensureAudio(); if (tune) { stopTune(); return false; } startTune(); return true; }
+
   const sb = $('#sound');
   sb.addEventListener('click', () => {
-    if (!ac) { startSound(); sb.textContent = '[ sound: on ]'; sb.setAttribute('aria-pressed', 'true'); return; }
-    if (ac.state === 'running') { ac.suspend(); sb.textContent = '[ sound: off ]'; sb.setAttribute('aria-pressed', 'false'); }
-    else { ac.resume(); sb.textContent = '[ sound: on ]'; sb.setAttribute('aria-pressed', 'true'); }
+    // the very first click on it just wakes the sound up (already on): the window pointerdown has opened it a moment ago
+    if (!ac || performance.now() - audioBorn < 1500) { ensureAudio(); return; }
+    const on = sb.getAttribute('aria-pressed') !== 'true';
+    hum.gain.cancelScheduledValues(ac.currentTime); hum.gain.setTargetAtTime(on ? 1 : 0, ac.currentTime, .2);
+    sb.textContent = on ? '[ sound: on ]' : '[ sound: off ]'; sb.setAttribute('aria-pressed', String(on));
   });
 })();
 </script>
