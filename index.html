@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>unreal</title>
+<meta name="description" content="nothing here is real.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 2'%3E%3Cpath fill='%23f800f8' d='M0 0h1v1H0zM1 1h1v1H1z'/%3E%3Cpath d='M1 0h1v1H1zM0 1h1v1H0z'/%3E%3C/svg%3E">
+<style>
+  :root { --mag: #f800f8; --ink: #e9e3ee; --dim: #6d6577; --bg: #050407; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: var(--bg); color: var(--ink); overflow: hidden; }
+  body { font-family: "Courier New", ui-monospace, Menlo, Consolas, monospace; -webkit-font-smoothing: antialiased; touch-action: none; }
+
+  canvas#world { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; }
+  canvas#world.drag { cursor: grabbing; }
+  canvas#world.hover { cursor: pointer; }
+  .vignette { position: fixed; inset: 0; pointer-events: none; background: radial-gradient(ellipse 75% 70% at 50% 50%, transparent 40%, rgba(5,4,7,.85) 100%); }
+  .scan { position: fixed; inset: 0; pointer-events: none; background: repeating-linear-gradient(to bottom, transparent 0 2px, rgba(0,0,0,.38) 2px 3px); }
+  canvas#grain { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; opacity: .08; mix-blend-mode: screen; }
+  canvas#trail { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+
+  /* boot */
+  .boot { position: fixed; inset: 0; z-index: 30; background: #000; display: grid; place-items: center; padding: 24px; transition: opacity 1.4s ease; cursor: pointer; }
+  .boot pre { font-size: 14px; line-height: 1.7; font-family: inherit; color: #b9b2c2; white-space: pre-wrap; max-width: 560px; width: 100%; }
+  .boot .err { color: var(--mag); }
+  .boot .hint { color: var(--dim); animation: blink 1.1s steps(2) infinite; }
+  .boot.gone { opacity: 0; pointer-events: none; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* overlay text */
+  header {
+    position: fixed; top: 9vh; left: 0; right: 0; z-index: 5; pointer-events: none;
+    display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 0 16px; text-align: center;
+  }
+  h1 { font-weight: 400; letter-spacing: .08em; font-size: clamp(24px, 5vw, 58px); line-height: 1; position: relative; text-shadow: 0 0 18px rgba(248,0,248,.35); }
+  h1::before, h1::after { content: attr(data-text); position: absolute; inset: 0; pointer-events: none; }
+  h1::before { color: #0ff; mix-blend-mode: screen; opacity: .55; animation: tear 4.7s steps(1) infinite; }
+  h1::after { color: var(--mag); mix-blend-mode: screen; opacity: .7; animation: tear 3.3s steps(1) infinite reverse; }
+  @keyframes tear {
+    0%, 86%, 100% { transform: translate(0, 0); clip-path: inset(0 0 100% 0); }
+    87% { transform: translate(-6px, 1px); clip-path: inset(12% 0 70% 0); }
+    90% { transform: translate(5px, -1px); clip-path: inset(48% 0 30% 0); }
+    93% { transform: translate(-3px, 0); clip-path: inset(80% 0 6% 0); }
+  }
+  .lede { color: var(--dim); font-size: clamp(11px, 1.4vw, 14px); letter-spacing: .06em; }
+  .lede b { color: var(--ink); font-weight: 400; }
+  .reasons { display: flex; gap: clamp(14px, 4vw, 42px); flex-wrap: wrap; justify-content: center; pointer-events: auto; }
+  .reason { position: relative; background: none; border: 0; color: var(--ink); font: inherit; font-size: clamp(14px, 2.1vw, 21px); letter-spacing: .14em; padding: 6px 2px; cursor: pointer; text-shadow: 0 0 10px #000; }
+  .reason .n { color: var(--mag); font-size: .6em; vertical-align: super; margin-right: 6px; }
+  .reason::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: linear-gradient(90deg, var(--mag), transparent); transform: scaleX(.15); transform-origin: left; transition: transform .5s ease; }
+  .reason:hover::after, .reason:focus-visible::after, .reason[aria-expanded="true"]::after { transform: scaleX(1); }
+  .reason:focus-visible { outline: 1px dashed var(--mag); outline-offset: 6px; }
+  .whisper { min-height: 3.2em; max-width: 520px; color: #c8c0d2; font-size: clamp(12px, 1.5vw, 15px); line-height: 1.6; letter-spacing: .03em; text-shadow: 0 0 10px #000, 0 0 2px #000; }
+  .cur { display: inline-block; width: .55em; background: var(--mag); animation: blink 1s steps(2) infinite; }
+
+  /* character quote bubble */
+  .bubble {
+    position: fixed; z-index: 8; pointer-events: none; max-width: min(320px, 80vw);
+    transform: translate(-50%, -100%); opacity: 0; transition: opacity .35s ease;
+    padding: 10px 12px; background: rgba(5,4,7,.82); border: 1px solid rgba(248,0,248,.55);
+    box-shadow: 0 0 22px rgba(248,0,248,.18); font-size: 13px; line-height: 1.55; color: #ddd5e6;
+  }
+  .bubble.on { opacity: 1; }
+  .bubble .who { display: block; color: var(--mag); font-size: 11px; letter-spacing: .14em; margin-bottom: 4px; text-transform: lowercase; }
+
+  .thought { position: fixed; z-index: 4; pointer-events: none; color: var(--dim); font-size: 12px; letter-spacing: .08em; white-space: nowrap; opacity: 0; transition: opacity 2.2s ease; text-shadow: 0 0 8px #000; }
+  .thought.on { opacity: .85; }
+
+  .corner { position: fixed; z-index: 6; font-size: 11px; letter-spacing: .12em; color: var(--dim); text-shadow: 0 0 6px #000; }
+  .tl { top: 14px; left: 16px; } .tr { top: 14px; right: 16px; text-align: right; }
+  .bl { bottom: 14px; left: 16px; } .br { bottom: 14px; right: 16px; text-align: right; }
+  .corner .mag { color: var(--mag); }
+  #sound { background: none; border: 0; color: inherit; font: inherit; letter-spacing: inherit; cursor: pointer; }
+  #sound:hover { color: var(--ink); }
+  .hint-drag { position: fixed; bottom: 42px; left: 0; right: 0; text-align: center; z-index: 6; color: var(--dim); font-size: 11px; letter-spacing: .14em; pointer-events: none; transition: opacity 2s ease; }
+  @media (max-width: 560px) { .tr, .br { display: none; } header { top: 7vh; gap: 10px; } }
+  @media (prefers-reduced-motion: reduce) { h1::before, h1::after { animation: none; } }
+</style>
+</head>
+<body>
+
+<canvas id="world" aria-label="a room where nothing is real. drag to look around."></canvas>
+<div class="vignette" aria-hidden="true"></div>
+<canvas id="trail" aria-hidden="true"></canvas>
+
+<header>
+  <h1 id="title" data-text="nothing here is real.">nothing here is real.</h1>
+  <p class="lede">in an unreal world there are only <b>3</b> reasons to live</p>
+  <div class="reasons">
+    <button class="reason" data-k="music" aria-expanded="false"><span class="n">01</span>music</button>
+    <button class="reason" data-k="food" aria-expanded="false"><span class="n">02</span>food</button>
+    <button class="reason" data-k="cigarettes" aria-expanded="false"><span class="n">03</span>cigarettes</button>
+  </div>
+  <p class="whisper" id="whisper" aria-live="polite"></p>
+</header>
+
+<div class="bubble" id="bubble" role="status"><span class="who" id="who"></span><span id="said"></span></div>
+
+<div class="corner tl">present day<span class="mag"> // </span>present time</div>
+<div class="corner tr" id="clock">--:--:--</div>
+<div class="corner bl"><button id="sound" aria-pressed="false">[ sound: off ]</button></div>
+<div class="corner br">china_tyanka<span class="mag"> // </span>texture not found</div>
+<div class="hint-drag" id="hint">[ drag to look around ]</div>
+
+<canvas id="grain" aria-hidden="true"></canvas>
+<div class="scan" aria-hidden="true"></div>
+
+<div class="boot" id="boot"><pre id="bootlog"></pre></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="characters.js"></script>
+<script>
+(() => {
+  const $ = (s) => document.querySelector(s);
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const MAG = 0xf800f8;
+
+  /* ================================================================ boot */
+  const bootLines = [
+    ['> mounting world .................. ok', ''], ['> loading sky ..................... ok', ''],
+    ['> loading people .................. 0 found', ''], ['> loading reality.png ............. ', ''],
+    ['  error: reality.png not found', 'err'], ['  using fallback texture', 'err'], ['', ''],
+    ['  [ click anywhere ]', 'hint'],
+  ];
+  const log = $('#bootlog');
+  let li = 0;
+  (function nextLine() {
+    if (li >= bootLines.length) return;
+    const [text, cls] = bootLines[li++];
+    const span = document.createElement('span'); if (cls) span.className = cls;
+    span.textContent = text + '\n'; log.appendChild(span);
+    setTimeout(nextLine, li === 4 ? 1400 : 380 + Math.random() * 260);
+  })();
+  let entered = false;
+  function enter() {
+    if (entered) return; entered = true;
+    const boot = $('#boot'); boot.classList.add('gone'); setTimeout(() => boot.remove(), 1500);
+    startThoughts();
+    setTimeout(() => { $('#hint').style.opacity = 0; }, 9000);
+  }
+  $('#boot').addEventListener('click', enter);
+  addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') enter(); }, { once: true });
+
+  /* ================================================================ 3D room */
+  const canvas = $('#world');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x050407);
+  scene.fog = new THREE.FogExp2(0x050407, 0.06);
+  const camera = new THREE.PerspectiveCamera(70, 1, 0.05, 200);
+  camera.position.set(0, 1.6, 0);
+
+  function checkerTexture(cells, px) {
+    const c = document.createElement('canvas'); c.width = c.height = cells * px;
+    const g = c.getContext('2d');
+    for (let y = 0; y < cells; y++) for (let x = 0; x < cells; x++) {
+      g.fillStyle = (x + y) % 2 ? '#000' : '#f800f8'; g.fillRect(x * px, y * px, px, px);
+    }
+    const t = new THREE.CanvasTexture(c);
+    t.magFilter = THREE.NearestFilter; t.minFilter = THREE.LinearMipmapLinearFilter;
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    return t;
+  }
+  const floorTex = checkerTexture(2, 64); floorTex.repeat.set(150, 150);
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(300, 300), new THREE.MeshBasicMaterial({ map: floorTex, color: 0xb070b8 }));
+  floor.rotation.x = -Math.PI / 2; scene.add(floor);
+  const ceilTex = checkerTexture(2, 64); ceilTex.repeat.set(150, 150);
+  const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(300, 300), new THREE.MeshBasicMaterial({ map: ceilTex, color: 0x2a1530 }));
+  ceiling.rotation.x = Math.PI / 2; ceiling.position.y = 7; scene.add(ceiling);
+
+  // a few missing-texture cubes floating in the dark for depth
+  const cubeTex = checkerTexture(2, 32);
+  const cubes = [];
+  for (let i = 0; i < 26; i++) {
+    const s = .4 + Math.random() * 1.4;
+    const m = new THREE.Mesh(new THREE.BoxGeometry(s, s, s), new THREE.MeshBasicMaterial({ map: cubeTex, color: 0x9a5aa0 }));
+    const a = Math.random() * Math.PI * 2, r = 14 + Math.random() * 40;
+    m.position.set(Math.cos(a) * r, 1 + Math.random() * 5, Math.sin(a) * r);
+    m.rotation.set(Math.random() * 3, Math.random() * 3, 0);
+    m.userData.spin = (Math.random() - .5) * .3;
+    scene.add(m); cubes.push(m);
+  }
+
+  // snow: slow lavender flakes drifting down from the ceiling, wrapping back to the top
+  const SNOW = 1600, SNOW_R = 14;
+  const snowPos = new Float32Array(SNOW * 3), snowSeed = new Float32Array(SNOW);
+  for (let i = 0; i < SNOW; i++) {
+    snowPos[i * 3] = (Math.random() * 2 - 1) * SNOW_R;
+    snowPos[i * 3 + 1] = Math.random() * 7;
+    snowPos[i * 3 + 2] = (Math.random() * 2 - 1) * SNOW_R;
+    snowSeed[i] = Math.random();
+  }
+  const snowGeo = new THREE.BufferGeometry();
+  snowGeo.setAttribute('position', new THREE.BufferAttribute(snowPos, 3));
+  const flake = (() => {
+    const c = document.createElement('canvas'); c.width = c.height = 32;
+    const g = c.getContext('2d'), gr = g.createRadialGradient(16, 16, 0, 16, 16, 16);
+    gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(.35, 'rgba(255,255,255,.75)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = gr; g.fillRect(0, 0, 32, 32);
+    return new THREE.CanvasTexture(c);
+  })();
+  const snow = new THREE.Points(snowGeo, new THREE.PointsMaterial({
+    map: flake, color: 0xeadcf2, size: .15, transparent: true, opacity: .9, depthWrite: false, blending: THREE.AdditiveBlending,
+  }));
+  scene.add(snow);
+  function updateSnow(dt, t) {
+    for (let i = 0; i < SNOW; i++) {
+      const s = snowSeed[i], k = i * 3;
+      snowPos[k + 1] -= dt * (.22 + s * .28);                       // slow, each flake its own speed
+      snowPos[k] += Math.sin(t * (.4 + s * .5) + s * 40) * dt * .18;   // gentle sideways sway
+      if (snowPos[k + 1] < 0) { snowPos[k + 1] = 7; snowPos[k] = (Math.random() * 2 - 1) * SNOW_R; snowPos[k + 2] = (Math.random() * 2 - 1) * SNOW_R; }
+    }
+    snowGeo.attributes.position.needsUpdate = true;
+  }
+
+  /* ---------------------------------------------------------------- characters */
+  function placeholderTexture() {
+    const c = document.createElement('canvas'); c.width = 256; c.height = 512;
+    const g = c.getContext('2d');
+    // figure silhouette (head + body), filled with checker
+    g.beginPath(); g.arc(128, 92, 58, 0, Math.PI * 2);
+    g.moveTo(60, 512); g.quadraticCurveTo(48, 210, 128, 170); g.quadraticCurveTo(208, 210, 196, 512); g.closePath();
+    g.save(); g.clip();
+    for (let y = 0; y < 512; y += 32) for (let x = 0; x < 256; x += 32) { g.fillStyle = ((x + y) / 32) % 2 ? '#000' : '#f800f8'; g.fillRect(x, y, 32, 32); }
+    g.restore();
+    const t = new THREE.CanvasTexture(c); t.magFilter = THREE.NearestFilter; return t;
+  }
+  const loader = new THREE.TextureLoader();
+  const figures = [];
+  const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: .55, depthWrite: false });
+  (window.CHARACTERS || []).forEach((ch, i) => {
+    const h = ch.height || 2.2;
+    const mat = new THREE.MeshBasicMaterial({ transparent: true, alphaTest: .08, side: THREE.DoubleSide, fog: true });
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat);
+    const a = THREE.MathUtils.degToRad(ch.angle || 0), d = ch.dist || 8;
+    // angle 0 = straight ahead at start (camera looks down -Z)
+    mesh.position.set(Math.sin(a) * d, h / 2, -Math.cos(a) * d);
+    mesh.userData = { ch, h, baseY: h / 2, phase: i * 1.7 };
+    const setTex = (tex, aspect) => { mat.map = tex; mat.needsUpdate = true; mesh.scale.set(h * aspect, h, 1); };
+    if (ch.img) loader.load(ch.img, (tex) => { tex.magFilter = THREE.LinearFilter; setTex(tex, tex.image.width / tex.image.height); },
+                            undefined, () => setTex(placeholderTexture(), .5));
+    else setTex(placeholderTexture(), .5);
+    const shadow = new THREE.Mesh(new THREE.CircleGeometry(.55, 24), shadowMat);
+    shadow.rotation.x = -Math.PI / 2; shadow.position.set(mesh.position.x, .01, mesh.position.z); shadow.scale.set(1.2, .6, 1);
+    scene.add(mesh, shadow); figures.push(mesh);
+  });
+
+  /* ---------------------------------------------------------------- look around */
+  let yaw = 0, pitch = -0.04, dragging = false, lastX = 0, lastY = 0, lastInput = performance.now(), moved = 0;
+  canvas.addEventListener('pointerdown', (e) => {
+    enter(); dragging = true; moved = 0; lastX = e.clientX; lastY = e.clientY;
+    canvas.setPointerCapture(e.pointerId); canvas.classList.add('drag'); lastInput = performance.now();
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    pointer.x = (e.clientX / innerWidth) * 2 - 1; pointer.y = -(e.clientY / innerHeight) * 2 + 1; pointerIn = true;
+    if (!dragging) return;
+    const dx = e.clientX - lastX, dy = e.clientY - lastY; lastX = e.clientX; lastY = e.clientY;
+    moved += Math.abs(dx) + Math.abs(dy);
+    yaw -= dx * .0042; pitch = Math.max(-1.1, Math.min(1.1, pitch - dy * .0036)); lastInput = performance.now();
+  });
+  const endDrag = (e) => {
+    if (!dragging) return; dragging = false; canvas.classList.remove('drag');
+    if (moved < 6) pick(true);           // a tap, not a drag: open the character under the finger
+  };
+  canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag);
+  canvas.addEventListener('pointerleave', () => { pointerIn = false; });
+  addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowLeft') yaw += .12; if (e.key === 'ArrowRight') yaw -= .12;
+    if (e.key === 'ArrowUp') pitch = Math.min(1.1, pitch + .08); if (e.key === 'ArrowDown') pitch = Math.max(-1.1, pitch - .08);
+    lastInput = performance.now();
+  });
+
+  /* ---------------------------------------------------------------- hover / tap a character */
+  const ray = new THREE.Raycaster(), pointer = new THREE.Vector2(); let pointerIn = false;
+  const bubble = $('#bubble'), who = $('#who'), said = $('#said');
+  let current = null, typing = null, pinned = false;
+  function showBubble(mesh) {
+    if (current === mesh) return;
+    current = mesh;
+    const { ch } = mesh.userData;
+    who.textContent = ch.name || '???';
+    clearInterval(typing); said.textContent = '';
+    let i = 0; const q = ch.quote || '';
+    if (reduced) said.textContent = q;
+    else typing = setInterval(() => { said.textContent = q.slice(0, ++i); if (i >= q.length) clearInterval(typing); }, 26);
+    bubble.classList.add('on');
+  }
+  function hideBubble() { current = null; pinned = false; bubble.classList.remove('on'); clearInterval(typing); }
+  function pick(tap) {
+    ray.setFromCamera(pointer, camera);
+    const hit = ray.intersectObjects(figures)[0];
+    if (hit) { showBubble(hit.object); pinned = tap; canvas.classList.add('hover'); }
+    else if (!pinned || tap) { hideBubble(); canvas.classList.remove('hover'); }
+  }
+  const tmp = new THREE.Vector3();
+  function placeBubble() {
+    if (!current) return;
+    tmp.copy(current.position); tmp.y += current.userData.h / 2 + .15; tmp.project(camera);
+    if (tmp.z > 1) { bubble.style.opacity = 0; return; }
+    bubble.style.opacity = '';
+    const x = Math.max(170, Math.min(innerWidth - 170, (tmp.x + 1) / 2 * innerWidth));
+    const y = Math.max(90, (1 - tmp.y) / 2 * innerHeight);
+    bubble.style.left = x + 'px'; bubble.style.top = y + 'px';
+  }
+
+  /* ---------------------------------------------------------------- loop */
+  function resize() {
+    renderer.setSize(innerWidth, innerHeight, false);
+    camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  }
+  resize(); addEventListener('resize', resize);
+  const clockT = new THREE.Clock();
+  (function frame() {
+    const dt = Math.min(clockT.getDelta(), .05), t = clockT.elapsedTime;
+    if (!dragging && !reduced && performance.now() - lastInput > 4000) yaw -= dt * .05;   // slow drift when idle
+    camera.rotation.set(pitch, yaw, 0, 'YXZ');
+    camera.position.y = 1.6 + (reduced ? 0 : Math.sin(t * .6) * .03);
+    if (!reduced) {
+      // glitchy floor: slides along x, freezes for a moment, then snaps back to the start and loops.
+      // A checkerboard looks the same every cell, so the run has to stay under half a cell (offset 1 = 2 cells):
+      // a longer one reads as the floor just crawling on instead of jumping back.
+      const FLOOR_RUN = .21, FLOOR_SLIDE = .45, FLOOR_HOLD = .2;
+      const ph = t % (FLOOR_SLIDE + FLOOR_HOLD);
+      floorTex.offset.x = Math.min(1, ph / FLOOR_SLIDE) * FLOOR_RUN;
+    }
+    for (const c of cubes) { c.rotation.y += c.userData.spin * dt; c.rotation.x += c.userData.spin * .5 * dt; }
+    if (!reduced) updateSnow(dt, t);
+    for (const f of figures) {
+      f.lookAt(camera.position.x, f.position.y, camera.position.z);   // always face you, stay upright
+      if (!reduced) f.position.y = f.userData.baseY + Math.sin(t * .8 + f.userData.phase) * .04;
+    }
+    if (pointerIn && !dragging) pick(false);
+    placeBubble();
+    renderer.render(scene, camera);
+    requestAnimationFrame(frame);
+  })();
+
+  /* ================================================================ reasons */
+  const lines = {
+    music: ['the only thing here that still sounds real.', 'headphones on. the world goes quiet. it was never really talking anyway.', 'missing textures, slowed down. the right speed for this place.'],
+    food: ['eat the apple. eat the cake. don\'t waste it. someone wanted it once.', 'taste is the last sense that hasn\'t been patched out.', 'hungry is proof. empty plates are proof. proof of what — i don\'t know.'],
+    cigarettes: ['smoke is the only cloud that ever rendered.', 'a small fire you\'re allowed to hold.', 'every breath out draws the room for a second. then it\'s gone again.'],
+  };
+  const whisper = $('#whisper'); let wt = null;
+  function type(text) {
+    clearInterval(wt); whisper.textContent = '';
+    if (reduced) { whisper.textContent = text; return; }
+    let i = 0; const cur = document.createElement('span'); cur.className = 'cur'; cur.textContent = ' ';
+    wt = setInterval(() => { whisper.textContent = text.slice(0, ++i); whisper.appendChild(cur); if (i >= text.length) clearInterval(wt); }, 34);
+  }
+  const used = { music: 0, food: 0, cigarettes: 0 };
+  document.querySelectorAll('.reason').forEach((b) => {
+    const show = () => {
+      const k = b.dataset.k;
+      document.querySelectorAll('.reason').forEach((o) => o.setAttribute('aria-expanded', String(o === b)));
+      type(lines[k][used[k]++ % lines[k].length]); blip(k);
+    };
+    b.addEventListener('mouseenter', show); b.addEventListener('click', show);
+  });
+
+  /* ================================================================ title, clock, thoughts */
+  const titles = ['unreal', 'missing', '...', 'nothing here', 'unreal', 'present day', '???'];
+  let ti = 0; setInterval(() => { document.title = titles[ti++ % titles.length]; }, 2600);
+  const h1 = $('#title');
+  const variants = ['nothing here is real.', 'n0thing here is real.', 'nothing here is rea_', 'ничего здесь не настоящее.'];
+  setInterval(() => {
+    if (reduced) return;
+    const v = variants[Math.floor(Math.random() * variants.length)];
+    h1.textContent = v; h1.dataset.text = v;
+    setTimeout(() => { h1.textContent = variants[0]; h1.dataset.text = variants[0]; }, 180 + Math.random() * 500);
+  }, 5200);
+  const clockEl = $('#clock');
+  setInterval(() => {
+    const d = new Date(), pad = (n) => String(n).padStart(2, '0');
+    const s = (d.getSeconds() + (Math.random() < .07 ? 13 : 0)) % 60;   // slightly wrong on purpose
+    clockEl.textContent = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(s)}`;
+  }, 1000);
+  const thoughts = ['the sky is a texture.', 'кто-нибудь здесь есть?', '0 new messages', 'loading self ... 99%', 'you were here yesterday. weren\'t you?', 'всё нормально. наверное.', 'present day. present time.', 'this room has no door. it never needed one.', 'i blinked and the year changed.', 'reality.png — 404', 'тут тихо. слишком тихо.', 'nobody is coming. that\'s fine.', 'the floor goes on forever. so does tuesday.', 'не спится.', 'everyone is online. no one is here.'];
+  function startThoughts() {
+    (function spawn() {
+      const t = document.createElement('div'); t.className = 'thought';
+      t.textContent = thoughts[Math.floor(Math.random() * thoughts.length)];
+      t.style.left = (6 + Math.random() * 70) + 'vw';
+      t.style.top = (Math.random() < .5 ? 34 + Math.random() * 12 : 70 + Math.random() * 20) + 'vh';
+      document.body.appendChild(t); requestAnimationFrame(() => t.classList.add('on'));
+      setTimeout(() => t.classList.remove('on'), 4200 + Math.random() * 2000); setTimeout(() => t.remove(), 8000);
+      setTimeout(spawn, 2200 + Math.random() * 3200);
+    })();
+  }
+
+  /* ================================================================ grain */
+  const gr = $('#grain'), gc = gr.getContext('2d'), G = 160; gr.width = G; gr.height = G;
+  const img = gc.createImageData(G, G);
+  (function grain() {
+    for (let i = 0; i < img.data.length; i += 4) { const v = Math.random() * 255; img.data[i] = img.data[i + 1] = img.data[i + 2] = v; img.data[i + 3] = 255; }
+    gc.putImageData(img, 0, 0); if (!reduced) setTimeout(() => requestAnimationFrame(grain), 70);
+  })();
+
+  /* ================================================================ cursor trail */
+  const tr = $('#trail'), tc = tr.getContext('2d'), sq = [];
+  function fit() { tr.width = innerWidth * devicePixelRatio; tr.height = innerHeight * devicePixelRatio; tc.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0); }
+  fit(); addEventListener('resize', fit);
+  addEventListener('pointermove', (e) => { if (!reduced && Math.random() < .5) sq.push({ x: e.clientX, y: e.clientY, life: 1, s: 6 + Math.random() * 8, vy: .2 + Math.random() * .5 }); });
+  (function drawTrail() {
+    tc.clearRect(0, 0, innerWidth, innerHeight);
+    for (let i = sq.length - 1; i >= 0; i--) {
+      const p = sq[i]; p.life -= .018; p.y += p.vy;
+      if (p.life <= 0) { sq.splice(i, 1); continue; }
+      const h = p.s / 2; tc.globalAlpha = p.life * .9;
+      tc.fillStyle = '#f800f8'; tc.fillRect(p.x, p.y, h, h); tc.fillRect(p.x + h, p.y + h, h, h);
+      tc.fillStyle = '#000'; tc.fillRect(p.x + h, p.y, h, h); tc.fillRect(p.x, p.y + h, h, h);
+    }
+    tc.globalAlpha = 1; requestAnimationFrame(drawTrail);
+  })();
+
+  /* ================================================================ sound */
+  let ac = null, master = null;
+  function startSound() {
+    ac = new (window.AudioContext || window.webkitAudioContext)();
+    master = ac.createGain(); master.gain.value = 0; master.connect(ac.destination);
+    master.gain.linearRampToValueAtTime(.55, ac.currentTime + 3);
+    [55, 55.4, 110.2].forEach((f, i) => { const o = ac.createOscillator(); o.type = i === 2 ? 'triangle' : 'sine'; o.frequency.value = f; const gg = ac.createGain(); gg.gain.value = i === 2 ? .025 : .07; o.connect(gg).connect(master); o.start(); });
+    const buf = ac.createBuffer(1, ac.sampleRate * 2, ac.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * .5;
+    const n = ac.createBufferSource(); n.buffer = buf; n.loop = true;
+    const lp = ac.createBiquadFilter(); lp.type = 'bandpass'; lp.frequency.value = 2400; lp.Q.value = .6;
+    const ng = ac.createGain(); ng.gain.value = .03; n.connect(lp).connect(ng).connect(master); n.start();
+  }
+  function blip(k) {
+    if (!ac) return;
+    const o = ac.createOscillator(), gg = ac.createGain();
+    o.type = 'square'; o.frequency.value = { music: 660, food: 440, cigarettes: 330 }[k];
+    gg.gain.setValueAtTime(.04, ac.currentTime); gg.gain.exponentialRampToValueAtTime(.0001, ac.currentTime + .25);
+    o.connect(gg).connect(master); o.start(); o.stop(ac.currentTime + .26);
+  }
+  const sb = $('#sound');
+  sb.addEventListener('click', () => {
+    if (!ac) { startSound(); sb.textContent = '[ sound: on ]'; sb.setAttribute('aria-pressed', 'true'); return; }
+    if (ac.state === 'running') { ac.suspend(); sb.textContent = '[ sound: off ]'; sb.setAttribute('aria-pressed', 'false'); }
+    else { ac.resume(); sb.textContent = '[ sound: on ]'; sb.setAttribute('aria-pressed', 'true'); }
+  });
+})();
+</script>
+</body>
+</html>
