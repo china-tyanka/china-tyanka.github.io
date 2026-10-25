@@ -515,7 +515,7 @@
     return ac;
   }
   addEventListener('pointerdown', ensureAudio);
-  const HUM_LEVEL = 1;
+  const HUM_LEVEL = .6;
   function startHum() {
     hum = ac.createGain(); hum.gain.value = 0; hum.connect(master);
     hum.gain.linearRampToValueAtTime(HUM_LEVEL, ac.currentTime + 3);
@@ -554,46 +554,77 @@
     n.connect(hp).connect(ng).connect(master); n.start(t0);
   }
 
-  // click a cube: a music-box melody in A minor loops until any cube is clicked again.
-  // [melody note, bass note] per eighth; bass only where a new chord starts.
+  // click a cube: the original music-box melody, slowed down and moved to B minor, played back as if from an old
+  // tape in a small room (a light wobble, a faint crackle, softened top). Loops until any cube is clicked again.
+  // [melody note, bass note] per eighth; bass only where a new chord starts: Bm, G, Em, F# (harmonic minor turn).
   const TUNE = [
-    [69, 45], [72], [76], [81], [79, 40], [76], [72], [71],
-    [65, 41], [69], [72], [77], [76, 48], [72], [69], [67],
-    [62, 38], [65], [69], [74], [72, 41], [69], [65], [64],
-    [64, 40], [68], [71], [76], [74, 40], [71], [68], [64],
+    [71, 47], [74], [78], [83], [81, 42], [78], [74], [73],
+    [67, 43], [71], [74], [79], [78, 50], [74], [71], [69],
+    [64, 40], [67], [71], [76], [74, 43], [71], [67], [66],
+    [66, 42], [70], [73], [78], [76, 42], [73], [70], [66],
   ];
-  const EIGHTH = .3;
+  const EIGHTH = .46;                          // the first version was .3
   let tune = null;
-  function note(fr, t, dur, type, vol, out) {
+  // shared hall: a few seconds of decaying noise as the impulse response
+  function hall(seconds) {
+    const len = Math.floor(ac.sampleRate * seconds), buf = ac.createBuffer(2, len, ac.sampleRate);
+    for (let c = 0; c < 2; c++) {
+      const d = buf.getChannelData(c);
+      for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.6);
+    }
+    const cv = ac.createConvolver(); cv.buffer = buf; return cv;
+  }
+  function voice(fr, t, attack, dur, type, vol, out, wow) {
     const o = ac.createOscillator(), g = ac.createGain();
     o.type = type; o.frequency.value = fr;
-    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(vol, t + .006); g.gain.exponentialRampToValueAtTime(.0001, t + dur);
-    o.connect(g).connect(out); o.start(t); o.stop(t + dur + .02);
+    o.detune.value = (Math.random() - .5) * 14;          // never quite in tune
+    wow.connect(o.detune);
+    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(vol, t + attack); g.gain.exponentialRampToValueAtTime(.0001, t + dur);
+    o.connect(g).connect(out); o.start(t); o.stop(t + dur + .05);
   }
   function startTune() {
-    const out = ac.createGain(); out.gain.value = 1; out.connect(master);
-    const echo = ac.createDelay(1), fb = ac.createGain(), wet = ac.createGain(), lp = ac.createBiquadFilter();
-    echo.delayTime.value = EIGHTH * 1.5; fb.gain.value = .32; wet.gain.value = .35; lp.type = 'lowpass'; lp.frequency.value = 2600;
-    const box = ac.createGain(); box.connect(out); box.connect(echo); echo.connect(lp).connect(fb).connect(echo); lp.connect(wet).connect(out);
-    tune = { out, box, step: 0, next: ac.currentTime + .05 };
+    const out = ac.createGain(); out.gain.value = 0; out.connect(master);
+    out.gain.setTargetAtTime(.45, ac.currentTime, 1.2);       // fades in out of nothing (same level as the first version)
+    // softened top and a little room around the original sound
+    const room = hall(2.4), wet = ac.createGain(), dry = ac.createGain(), lp = ac.createBiquadFilter();
+    wet.gain.value = .3; dry.gain.value = 1;
+    lp.type = 'lowpass'; lp.frequency.value = 3200; lp.Q.value = .6;
+    const bus = ac.createGain(); bus.connect(lp); lp.connect(dry).connect(out); lp.connect(room); room.connect(wet).connect(out);
+    // the original echo of the music box
+    const echo = ac.createDelay(1.5), fb = ac.createGain(), ewet = ac.createGain(), elp = ac.createBiquadFilter();
+    echo.delayTime.value = EIGHTH * 1.5; fb.gain.value = .32; ewet.gain.value = .35; elp.type = 'lowpass'; elp.frequency.value = 2600;
+    const box = ac.createGain(); box.connect(bus); box.connect(echo); echo.connect(elp).connect(fb).connect(echo); elp.connect(ewet).connect(bus);
+    // old tape: a gentle slow wobble plus a faint flutter, shared by every note
+    const wow = ac.createGain(), lfo = ac.createOscillator(), flut = ac.createOscillator(), flutAmt = ac.createGain();
+    lfo.frequency.value = .2; wow.gain.value = 7; lfo.connect(wow); lfo.start();
+    flut.frequency.value = 5.3; flutAmt.gain.value = 2; flut.connect(flutAmt).connect(wow); flut.start();
+    // record crackle and hiss, quiet, not in the hall (it is "on the recording")
+    const nlen = ac.sampleRate * 3, nbuf = ac.createBuffer(1, nlen, ac.sampleRate), nd = nbuf.getChannelData(0);
+    for (let i = 0; i < nlen; i++) nd[i] = (Math.random() * 2 - 1) * .25 + (Math.random() < .0004 ? (Math.random() * 2 - 1) * 3 : 0);
+    const crackle = ac.createBufferSource(), cf = ac.createBiquadFilter(), cg = ac.createGain();
+    crackle.buffer = nbuf; crackle.loop = true; cf.type = 'bandpass'; cf.frequency.value = 1800; cf.Q.value = .5; cg.gain.value = .006;
+    crackle.connect(cf).connect(cg).connect(out); crackle.start();
+    tune = { out, bus, box, wow, lfo, flut, crackle, step: 0, next: ac.currentTime + .6 };
     tune.timer = setInterval(() => {
-      while (tune && tune.next < ac.currentTime + .15) {
+      while (tune && tune.next < ac.currentTime + .25) {
         const [m, b] = TUNE[tune.step % TUNE.length], t = tune.next;
-        note(midi(m), t, 1.4, 'triangle', .09, tune.box);
-        note(midi(m + 12), t, .5, 'sine', .02, tune.box);
-        if (b) note(midi(b), t, EIGHTH * 4.2, 'sine', .14, tune.out);
+        // the original music box: triangle note with a quiet sine an octave up, and the sine bass
+        voice(midi(m), t, .006, 1.9, 'triangle', .09, tune.box, tune.wow);
+        voice(midi(m + 12), t, .006, .7, 'sine', .02, tune.box, tune.wow);
+        if (b) voice(midi(b), t, .006, EIGHTH * 4.2, 'sine', .14, tune.bus, tune.wow);
         tune.step++; tune.next += EIGHTH;
       }
-    }, 25);
+    }, 40);
   }
   function stopTune() {
     if (!tune) return;
     clearInterval(tune.timer);
-    const out = tune.out; out.gain.setTargetAtTime(0, ac.currentTime, .15); setTimeout(() => out.disconnect(), 1500);
+    const { out, lfo, flut, crackle } = tune;
+    out.gain.cancelScheduledValues(ac.currentTime); out.gain.setTargetAtTime(0, ac.currentTime, .9);
+    setTimeout(() => { out.disconnect(); lfo.stop(); flut.stop(); crackle.stop(); }, 7000);   // let the room ring out
     tune = null;
   }
   function toggleTune() { ensureAudio(); if (tune) { stopTune(); return false; } startTune(); return true; }
-
   const sb = $('#sound');
   sb.addEventListener('click', () => {
     // the very first click on it just wakes the sound up (already on): the window pointerdown has opened it a moment ago
