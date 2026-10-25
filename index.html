@@ -243,10 +243,29 @@
     const a = THREE.MathUtils.degToRad(ch.angle || 0), d = ch.dist || 8;
     // angle 0 = straight ahead at start (camera looks down -Z)
     mesh.position.set(Math.sin(a) * d, h / 2, -Math.cos(a) * d);
-    mesh.userData = { ch, h, baseY: h / 2, phase: i * 1.7 };
-    const setTex = (tex, aspect) => { mat.map = tex; mat.needsUpdate = true; mesh.scale.set(h * aspect, h, 1); };
-    if (ch.img) loader.load(ch.img, (tex) => { tex.magFilter = THREE.LinearFilter; setTex(tex, tex.image.width / tex.image.height); },
-                            undefined, () => setTex(placeholderTexture(), .5));
+    const u = mesh.userData = { ch, h, baseY: h / 2, phase: i * 1.7, line: -1 };
+    // frames: folded-up sprites shown first; a click plays them through to the full picture (img).
+    // They come from the same shot, so each keeps its size relative to the full picture (a folded sheet is lower)
+    const folded = ch.frames && ch.frames.length > 0;
+    const setTex = u.setTex = (tex, aspect) => {
+      const hh = folded && u.mainPx ? h * tex.image.height / u.mainPx : h;
+      mat.map = tex; mat.needsUpdate = true; mesh.scale.set(hh * aspect, hh, 1);
+      u.baseY = hh / 2; mesh.position.y = hh / 2;
+    };
+    if (folded) {
+      u.frames = ch.frames.map(() => null);
+      ch.frames.forEach((src, k) => loader.load(src, (tex) => {
+        u.frames[k] = { tex, aspect: tex.image.width / tex.image.height };
+        if (k === 0 && u.line < 0 && !u.unfolding) setTex(tex, u.frames[0].aspect);
+      }));
+    }
+    if (ch.img) loader.load(ch.img, (tex) => {
+                              tex.magFilter = THREE.LinearFilter;
+                              u.main = { tex, aspect: tex.image.width / tex.image.height };
+                              u.mainPx = tex.image.height;
+                              if (!folded) setTex(tex, u.main.aspect);
+                              else if (u.line < 0 && !u.unfolding && u.frames[0]) setTex(u.frames[0].tex, u.frames[0].aspect);   // resize now that the scale is known
+                            }, undefined, () => setTex(placeholderTexture(), .5));
     else setTex(placeholderTexture(), .5);
     const shadow = new THREE.Mesh(new THREE.CircleGeometry(.55, 24), shadowMat);
     shadow.rotation.x = -Math.PI / 2; shadow.position.set(mesh.position.x, .01, mesh.position.z); shadow.scale.set(1.2, .6, 1);
@@ -283,23 +302,62 @@
   const ray = new THREE.Raycaster(), pointer = new THREE.Vector2(); let pointerIn = false;
   const bubble = $('#bubble'), who = $('#who'), said = $('#said');
   let current = null, typing = null, pinned = false;
-  function showBubble(mesh) {
-    if (current === mesh) return;
+  function showBubble(mesh, text) {
+    if (current === mesh && text === undefined) return;
     current = mesh;
     // figures bob, so the cursor at their edge flickers in and out: one chime per figure per 1.5 s
     const now = performance.now();
-    if (now - (mesh.userData.chimedAt || 0) > 1500) hoverSound(figures.indexOf(mesh));
+    if (text !== undefined || now - (mesh.userData.chimedAt || 0) > 1500) hoverSound(figures.indexOf(mesh));
     mesh.userData.chimedAt = now;
     const { ch } = mesh.userData;
     who.textContent = ch.name || '???';
     clearInterval(typing); said.textContent = '';
-    let i = 0; const q = ch.quote || '';
+    let i = 0; const q = text !== undefined ? text : (ch.quote || '');
     if (reduced) said.textContent = q;
-    else typing = setInterval(() => { said.textContent = q.slice(0, ++i); if (i >= q.length) clearInterval(typing); }, 26);
+    else typing = setInterval(() => { said.textContent = q.slice(0, ++i); if (i >= q.length) clearInterval(typing); }, ch.typeMs || 26);
     bubble.classList.add('on');
   }
   function hideBubble() { current = null; pinned = false; bubble.classList.remove('on'); clearInterval(typing); }
-  let playingCube = null;  function pick(tap) {
+  // characters with `lines` talk one sentence per click; with `frames` the first click unfolds them first,
+  // and a while after the last sentence they fold back up and go to sleep until the next click
+  function playFrames(u, seq, done) {
+    const ms = u.ch.frameMs || 110;
+    let k = 0;
+    u.unfolding = true;
+    (function step() {
+      const f = seq[k];
+      if (f) u.setTex(f.tex, f.aspect);
+      if (++k < seq.length) setTimeout(step, ms);
+      else { u.unfolding = false; done(); }
+    })();
+  }
+  function advance(mesh) {
+    const u = mesh.userData, lines = u.ch.lines;
+    if (u.unfolding) return;
+    const say = () => {
+      showBubble(mesh, lines[u.line]); pinned = true;
+      if (u.frames && u.line === lines.length - 1) {
+        const line = u.line, wait = lines[line].length * (u.ch.typeMs || 26) + 3000;
+        clearTimeout(u.sleepTimer);
+        u.sleepTimer = setTimeout(() => {
+          if (u.line !== line || u.unfolding) return;
+          if (current === mesh) hideBubble();
+          playFrames(u, [u.main, ...u.frames.slice().reverse()].slice(1), () => { u.line = -1; });
+        }, wait);
+      }
+    };
+    if (u.line < 0 && u.frames) {
+      hideBubble();
+      setTimeout(() => playFrames(u, [...u.frames.slice(1), u.main], () => { u.line = 0; say(); }), u.ch.frameMs || 110);
+      u.unfolding = true;      // block clicks during the first frame's pause too
+      return;
+    }
+    u.line = (u.line + 1) % lines.length;
+    say();
+  }
+
+  let playingCube = null;
+  function pick(tap) {
     ray.setFromCamera(pointer, camera);
     const hit = ray.intersectObjects(figures)[0];
     // floor and ceiling are in the test too, so a cube only counts when it is the first thing under the cursor
@@ -310,7 +368,11 @@
       playingCube = toggleTune() ? cubeHit.object : null;
       return;
     }
-    if (hit) { showBubble(hit.object); pinned = tap; canvas.classList.add('hover'); }
+    if (hit && hit.object.userData.ch.lines) {   // says nothing on hover, only when clicked
+      canvas.classList.add('hover');
+      if (tap) advance(hit.object);
+    }
+    else if (hit) { showBubble(hit.object); pinned = tap; canvas.classList.add('hover'); }
     else {
       if (!pinned || tap) hideBubble();
       canvas.classList.toggle('hover', !!cubeHit);
